@@ -1,0 +1,150 @@
+//--------------------------------------------//
+//----Datalogger based on---------------------//
+//----Sven Burkart's "integration Piksi"------//
+//----Andreas Hirt----------------------------//
+//----MSG_Baseline_NED-Log--------------------//
+//----written for Arduino Leonardo------------//
+//----required hardware:----------------------//
+//----Leonardo,SD reader socket,CD4050BE HEX--//
+//--------------------------------------------//
+
+
+#include <SPI.h>
+#include <SD.h>
+
+const int chipSelect = 4;
+int ledPin = 2;                 // LED connected to digital pin 13
+String indata;
+bool state_sd_card = 0;
+String file_name = "logdata.txt";
+
+const unsigned int MAX_INPUT = 200;                    // max count message bytes
+
+void setup() {
+                        // put your setup code here, to run once:
+
+  pinMode(10, OUTPUT);   // Per SD library notes, pin 10 must be set to output
+  pinMode(4, OUTPUT);   // Per SD library notes, pin 10 must be set to output
+  digitalWrite(10, HIGH);   // sets the LED on
+  pinMode(ledPin, OUTPUT);      // sets the digital pin as output
+  digitalWrite(ledPin, HIGH);   // sets the LED on
+  
+  Serial.begin(115200);                                //usb out on TX0
+  Serial1.begin (115200);                              //GPS in on RX1
+
+ // see if the card is present and can be initialized:
+  if (!SD.begin(chipSelect)) {
+    Serial.println("Card failed, or not present");
+    digitalWrite(ledPin, LOW);   // sets the LED off
+    state_sd_card = 0;
+  }
+  else
+  {
+    state_sd_card = 1;
+  }
+  
+
+}
+
+void loop() {
+                                                     // put your main code here, to run repeatedly:
+
+  while (Serial1.available () > 0)                   //if piksi send data to RX1, 
+  {
+    processIncomingByte (Serial1.read ());           //do function processIncomingByte! 
+  }
+}
+                                                    //analyse SBP  with function processIncomingByte
+void processIncomingByte (const byte inByte)        //filters the message MSG_BASELINE_NED
+{
+ // Serial.println(inByte , HEX);                   //Serial.print(anything) are used for testing the code step by step
+  
+  static byte input_msg [MAX_INPUT];
+  static unsigned int input_pos = 0;               // non-negative int
+  
+  if (inByte == 0x55)
+  {
+   // Serial.println("0x55 incoming...");
+
+//      for( int i = 0 ; i < input_pos ; i++)
+//      {
+//        Serial.print(input_msg[i],HEX);     //  // wenn hex 55 print gesammter puffer [input_msg)
+//        Serial.print(" ");
+//      }    
+//      Serial.println();                     //  // neue Zeile nach kpl. msg print
+    if (input_pos == 29)
+    {  
+      if((input_msg[0] == 0x03) && (input_msg[1] == 0x02))
+      {
+        msg_analyse (input_msg);              //function to analyse the filtered msg
+      }
+    }
+    input_pos = 0;                            //put input_pos again to zero
+  }
+  else
+  {
+    if (input_pos < (MAX_INPUT - 1))       //  // nur wenn pufferlänge nicht erreicht ist (in unserem Falle, wird das nicht der Fall sein)        
+    {
+      input_msg [input_pos] = inByte;      //  // schreibt byte in puffer an position 0
+      input_pos = input_pos + 1;           //  // erhöht position im Puffer um 1
+    }
+  }
+  
+}
+
+void msg_analyse (byte byte_msg[29])        //function to analyse the message
+{
+  double east = 0;
+  double north = 0;
+  double down = 0;
+  double dist = 0;
+  int flags = 0;
+  
+  north = bytesToInt (byte_msg[12], byte_msg[11], byte_msg[10], byte_msg[9]);
+  east = bytesToInt (byte_msg[16], byte_msg[15], byte_msg[14], byte_msg[13]);
+  down  = bytesToInt (byte_msg[20], byte_msg[19], byte_msg[18], byte_msg[17]);
+  flags = (byte_msg[26]);
+  
+  Serial.print("north ");
+  Serial.print(north);
+  Serial.print(" ; east ");
+  Serial.print(east);
+  Serial.print(" ; down ");
+  Serial.print(down);
+  Serial.print(" ; flags ");
+  Serial.print(flags);
+  
+  dist=sqrt(north*north+east*east+down*down);               //calc direct distance to base
+  Serial.print(" ; direkte Distanz zur Basis ");            //direct distance to base in [mm]
+  Serial.println(dist);
+  
+  double indata[5] =  {north , east , down , dist , flags} ;
+
+
+  // Write to SD-Card
+ 
+  File dataFile = SD.open(file_name, FILE_WRITE);           //create or open file "file_name" 
+     if (dataFile)                                          //and start writing "indata[5]" at the end of the file 
+      {
+        for(int ii = 0; ii < 5; ii++ )
+        {
+         dataFile.print(indata[ii]);
+         dataFile.print(";");
+        }
+        dataFile.println();
+        }
+      else
+      {
+      digitalWrite(ledPin, !digitalRead(ledPin));          
+      Serial.println("Fehler schreiben ...");
+      state_sd_card = 0;
+      }
+    dataFile.close();                                       //save file
+}
+  
+int bytesToInt (int b4, int b3, int b2, int b1)   // //4 bytes verschieben, zusammensetzen und zu dezimalzahl wandeln
+{
+  int resultat=0;
+  resultat=(b4 << 24) | (b3<<16) | (b2<<8) | b1;  // //bytes in resultatvariable nach links verschieben bis aus 4 bytes eine zahl wird
+  return resultat;
+}
